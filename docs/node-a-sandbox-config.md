@@ -1,9 +1,41 @@
-# Oracle VM VirtualBox 7.2.14 Sandbox Architecture Configuration
+# Oracle VM VirtualBox Sandbox Architecture Configuration (Node C)
 
-This document outlines the technical configuration for establishing an isolated sandbox environment using Oracle VM VirtualBox 7.2.14 for a Windows 11 guest. The configuration balances system stability and visual fluidity for recording purposes, enforces strict execution constraints, manages cryptographic states, and limits networking surfaces. The architecture integrates critical modifications to the Desktop Window Manager pipeline and multi-core synchronization protocols to ensure an interactive analysis state.
+This document outlines the technical configuration for establishing an isolated sandbox environment using Oracle VM VirtualBox for a Windows 11 guest. The configuration balances system stability and visual fluidity for recording purposes, enforces strict execution constraints, manages cryptographic states, and limits networking surfaces. The architecture integrates critical modifications to the Desktop Window Manager pipeline and multi-core synchronization protocols to ensure an interactive analysis state.
 
-## 1. Internal Network Assignment and VirtIO Offloading
-The command links the primary adapter to an isolated switch in host memory, preventing external traffic routing. Using a paravirtualized driver bypasses emulation vulnerabilities, creating an efficient memory channel that communicates directly with the hypervisor boundary. By utilizing the VirtIO standard, the engine eliminates the need to emulate complex hardware states, minimizing the attack surface associated with malicious packet crafting targeting virtual network interface cards. Disabling secondary interfaces blocks alternative escape routes. The engine explicitly marks nullified interfaces as disabled.
+## Prerequisite: Hypervisor Session State Cleansing
+The hypervisor enforces strict single-writer session locks on virtual machine configuration files. The initialization sequence mandates a preemptive termination of all background daemon processes to guarantee successful parameter injection and prevent invalid object state rejections before executing any architectural changes.
+
+**Implementation Command:**
+
+    killall -9 VirtualBox VBoxSVC VBoxHeadless 2>/dev/null || true
+    sleep 2
+
+## 1. Physical Host Kernel Hardening
+Securing the execution boundary requires fortifying the physical host operating system against advanced hypervisor escape techniques. The engine utilizes the sysctl daemon to inject restrictive kernel parameters. Blinding the Extended Berkeley Packet Filter Just-In-Time compiler neutralizes heap spraying exploits, while strict pointer restrictions prevent malicious payloads from mapping the host kernel memory layout.
+
+**Implementation Command:**
+
+    cat << 'EOF' | sudo tee /etc/sysctl.d/99-sandbox-hardening.conf
+    kernel.kptr_restrict = 2
+    net.core.bpf_jit_harden = 2
+    kernel.unprivileged_bpf_disabled = 1
+    kernel.yama.ptrace_scope = 2
+    vm.unprivileged_userfaultfd = 0
+    kernel.dmesg_restrict = 1
+    EOF
+    sudo sysctl --system
+
+**Diagnostic Command:**
+
+    sysctl kernel.kptr_restrict net.core.bpf_jit_harden
+
+**Optimal Output:**
+
+    kernel.kptr_restrict = 2
+    net.core.bpf_jit_harden = 2
+
+## 2. Internal Network Assignment and VirtIO Offloading
+The network bridging configuration isolates the primary virtual adapter to an internal memory switch, neutralizing uncontrolled egress routing. Utilizing the paravirtualized VirtIO driver circumvents emulation vulnerabilities and leverages a streamlined shared-memory ring buffer mechanism that bypasses hardware emulation entirely. Binding the nullified secondary interfaces to a permanent disabled state mathematically reduces the network stack attack surface.
 
 **Implementation Command:**
 
@@ -18,8 +50,8 @@ The command links the primary adapter to an isolated switch in host memory, prev
 
     NIC 1:                       MAC: 080027XXXXXX, Attachment: Internal Network 'VBOX-NETWORK-SANDBOX', Cable connected: on, Trace: off (file: none), Type: virtio, Reported speed: 0 Mbps, Boot priority: 0, Promisc Policy: deny, Bandwidth group: NODE-A-BANDWIDTH-GROUP
 
-## 2. Network Bandwidth Throttling
-The configuration creates a transmission limit group capped at ten megabytes per second and binds it to the primary network adapter. The token-bucket system silently drops outbound packets that exceed this threshold. By enforcing a hard ceiling on network throughput, the architecture mitigates the risk of the sandbox being utilized as a staging ground for denial-of-service floods or rapid lateral data exfiltration. The limit remains transparent to the guest, preventing the execution of lateral network floods without alerting the payload.
+## 3. Network Bandwidth Throttling
+Establishing a strict ceiling on outbound network transmission prevents a compromised detonation node from executing denial-of-service floods against synthetic infrastructure or external networks. The token-bucket bandwidth controller enforces a hard limit of ten megabytes per second. This ensures covert lateral floods remain mathematically impossible while preserving guest uptime.
 
 **Implementation Command:**
 
@@ -34,8 +66,8 @@ The configuration creates a transmission limit group capped at ten megabytes per
 
     Name: 'NODE-A-BANDWIDTH-GROUP', Type: network, Limit: 10 MBytes/sec
 
-## 3. Network Boot Deactivation
-The configuration restricts the boot sequence strictly to the attached local disk. Setting remaining devices to a null state removes network boot protocols from the initialization phase. The diagnostic output specifically identifies these disconnected slots as not assigned. This prevents firmware from parsing malicious Preboot Execution Environment network configuration packets, effectively severing an initial exploitation vector before the operating system kernel is loaded into memory.
+## 4. Network Boot Deactivation
+Restricting the boot sequence strictly to the local non-volatile storage eliminates a highly complex exploitation vector. The architecture forcibly nullifies all boot device slots except the primary disk. Severing the network initialization sequence removes the theoretical attack surface against the virtual firmware entirely before the operating system kernel is loaded into memory.
 
 **Implementation Command:**
 
@@ -52,31 +84,30 @@ The configuration restricts the boot sequence strictly to the attached local dis
     Boot Device 3:               Not Assigned
     Boot Device 4:               Not Assigned
 
-## 4. Hardware-Assisted Paging and TLB Optimization
-Activating nested paging allows the physical processor to manage memory translation directly, while large pages reduce translation overhead. By utilizing Extended Page Tables, the hypervisor prevents the guest from directly manipulating host memory mappings. The architecture-specific parameter enables virtual processor identifiers to tag cache entries, preventing severe latency during context switches. Page fusion is explicitly disabled to prevent memory deduplication side-channel vulnerabilities, ensuring that malicious payloads cannot infer the presence of host-level memory structures by measuring write-access latency.
+## 5. Hardware-Assisted Paging and TLB Optimization
+Activating nested paging allows the physical processor to manage memory translation directly. Explicitly disabling large pages prevents physical memory fragmentation, prioritizing system viability and ensuring rapid guest boot times. Modifying page fusion is omitted to prevent architecture detection faults on 64-bit host kernels.
 
 **Implementation Command:**
 
-    VBoxManage modifyvm "NODE-A-VM-NAME" --nested-paging=on --large-pages=on --page-fusion=off
+    VBoxManage modifyvm "NODE-A-VM-NAME" --nested-paging=on --large-pages=off
     VBoxManage modifyvm "NODE-A-VM-NAME" --x86-vtx-vpid=on
 
 **Diagnostic Command:**
 
-    VBoxManage showvminfo "NODE-A-VM-NAME" | grep -E -i "(Nested Paging|Large Pages|Page Fusion|VPID)"
+    VBoxManage showvminfo "NODE-A-VM-NAME" | grep -E -i "(Nested Paging|Large Pages|VPID)"
 
 **Optimal Output:**
 
     Nested Paging:               enabled
-    Large Pages:                 enabled
+    Large Pages:                 disabled
     VT-x VPID:                   enabled
-    Page Fusion:                 disabled
 
-## 5. Microarchitectural Buffer Optimization
-The command forces the hypervisor to scrub processor caches and execute indirect branch predictor barriers during context switches. Activating these hardware defenses isolates the host processor from transient execution manipulation. The mitigations prevent malicious code from exploiting speculative execution vulnerabilities to read privileged memory pages belonging to the underlying Linux host. Flushing the Level 1 Data Cache strictly confines guest operations, ensuring that cryptographic keys or host telemetry routing data remain completely inaccessible to the payload running inside the boundary.
+## 6. Microarchitectural Buffer Optimization
+Mitigating speculative execution vulnerabilities requires hardware buffering. Instructing the hypervisor to flush the Level 1 Data Cache strictly upon virtual machine entry balances the requirement to prevent transient execution memory leaks with the necessity of maintaining fluid execution dynamics. Disabling the indirect branch predictor barrier on virtual machine exit avoids destructive instruction latency and prevents Deferred Procedure Call watchdog timeouts.
 
 **Implementation Command:**
 
-    VBoxManage modifyvm "NODE-A-VM-NAME" --spec-ctrl=on --l1d-flush-on-vm-entry=on --mds-clear-on-vm-entry=on --ibpb-on-vm-entry=on --ibpb-on-vm-exit=on
+    VBoxManage modifyvm "NODE-A-VM-NAME" --spec-ctrl=on --l1d-flush-on-vm-entry=on --mds-clear-on-vm-entry=on --ibpb-on-vm-entry=on --ibpb-on-vm-exit=off
 
 **Diagnostic Command:**
 
@@ -84,60 +115,42 @@ The command forces the hypervisor to scrub processor caches and execute indirect
 
 **Optimal Output:**
 
-    ibpb-on-vm-exit="on"
+    ibpb-on-vm-exit="off"
     ibpb-on-vm-entry="on"
     spec-ctrl="on"
     l1d-flush-on-vm-entry="on"
     mds-clear-on-vm-entry="on"
 
-## 6. Time Desynchronization and Epoch Spoofing
-The command severs the virtual machine from the physical host clock, freezing chronological telemetry by disabling host-time synchronization. A negative offset rewinds the chronological epoch by thirty days. This synthetic chronometry subverts malicious payloads relying on time-bomb logic or latency measurements to detect the analysis platform. The multi-core physical execution binding has been omitted, preserving synchronized timing across virtual processors and preventing catastrophic Desktop Window Manager lockups within the guest kernel.
-
-**Implementation Command:**
-
-    VBoxManage modifyvm "NODE-A-VM-NAME" --hpet=on
-    VBoxManage setextradata "NODE-A-VM-NAME" "VBoxInternal/Devices/VMMDev/0/Config/GetHostTimeDisabled" 1
-    VBoxManage modifyvm "NODE-A-VM-NAME" --biossystemtimeoffset -2592000000
-
-**Diagnostic Command:**
-
-    VBoxManage showvminfo "NODE-A-VM-NAME" | grep -i "HPET"
-    VBoxManage getextradata "NODE-A-VM-NAME" enumerate | grep -E "(GetHostTimeDisabled)"
-
-**Optimal Output:**
-
-    HPET:                        enabled
-    Key: VBoxInternal/Devices/VMMDev/0/Config/GetHostTimeDisabled, Value: 1
-
 ## 7. Execution Architecture and Core Allocation
-The command assigns four virtual processing cores to the engine and permits them to utilize their full capacity. Providing sufficient processing power prevents the guest scheduler from dropping threads under heavy analysis loads. By matching the core count of standard commercial consumer hardware, the configuration actively deceives sandbox-evasion routines embedded within malicious payloads, bypassing heuristic checks that refuse execution on single-core or dual-core analysis environments.
+The architecture assigns four physical processing cores with a strict ninety percent execution cap to preserve the thermal design power limits of the physical host processor. The baseline physical memory allocation of 8192 Megabytes guarantees that Virtualization-Based Security frameworks possess the necessary contiguous address space for flawless initialization, completely eradicating STATUS_NO_MEMORY exceptions.
 
 **Implementation Command:**
 
-    VBoxManage modifyvm "NODE-A-VM-NAME" --cpus=4 --cpu-execution-cap=100
+    VBoxManage modifyvm "NODE-A-VM-NAME" --cpus=4 --cpu-execution-cap=90 --memory=8192
 
 **Diagnostic Command:**
 
-    VBoxManage showvminfo "NODE-A-VM-NAME" | grep -E -i "(Number of CPUs|CPU exec cap)"
+    VBoxManage showvminfo "NODE-A-VM-NAME" | grep -E -i "(Number of CPUs|CPU exec cap|Memory size)"
 
 **Optimal Output:**
 
+    Memory size:                 8192MB
     Number of CPUs:              4
-    CPU exec cap:                100%
+    CPU exec cap:                90%
 
 ## 8. Legacy Hardware and USB Disconnection
-The system reverts the pointing device to a standard PS/2 mouse to allow the complete detachment of physical universal serial bus protocols. The engine removes legacy communication ports and eliminates the emulated audio backend using standard virtual driver deactivation. Disabling these interfaces removes extensive emulation code, permanently blinding exploit vectors that target virtualized descriptor parsing and hardware translation. Utilizing the modernized parameters ensures operational execution within the updated VirtualBox 7.x syntax framework.
+Removing legacy hardware protocols achieves a dramatic reduction in the attack surface. Standard syntax nullifies the universal serial bus controllers and eliminates the Extensible Host Controller Interface. The emulated audio backend is deactivated by removing the driver binding entirely. Restricting pointing inputs strictly to the legacy PS/2 protocol permanently closes communication vectors utilized for out-of-bounds reads against the hypervisor boundaries.
 
 **Implementation Command:**
 
     VBoxManage modifyvm "NODE-A-VM-NAME" --mouse=ps2
     VBoxManage modifyvm "NODE-A-VM-NAME" --usb=off --usbehci=off --usbxhci=off
-    VBoxManage modifyvm "NODE-A-VM-NAME" --audio-driver=none --audio-controller=none
+    VBoxManage modifyvm "NODE-A-VM-NAME" --audio-driver=none
     VBoxManage modifyvm "NODE-A-VM-NAME" --uart1=off --lpt1=off
 
 **Diagnostic Command:**
 
-    VBoxManage showvminfo "NODE-A-VM-NAME" | grep -E -i "(Pointing Device|USB|EHCI|XHCI|Audio|UART|LPT)"
+    VBoxManage showvminfo "NODE-A-VM-NAME" | grep -E -i "(Pointing Device|USB|EHCI|XHCI|Audio:|UART|LPT)"
 
 **Optimal Output:**
 
@@ -145,27 +158,28 @@ The system reverts the pointing device to a standard PS/2 mouse to allow the com
     USB:                         disabled
     EHCI:                        disabled
     XHCI:                        disabled
-    Audio:                       disabled (Driver: None, Controller: None, Codec: Unknown)
+    Audio:                       disabled (Driver: None, Codec: Unknown)
     UART 1:                      disabled
     LPT 1:                       disabled
 
 ## 9. IOMMU and Hardware Translation Lockdown
-The command explicitly disables the emulated hardware translation layer. Because the architecture relies on paravirtualized network drivers instead of passing physical hardware directly into the virtual machine, this translation layer is unnecessary. Keeping it turned off removes complex software from the execution path, eliminating the risk of out-of-bounds memory vulnerabilities where an attacker could theoretically compromise the input/output memory management unit translation tables.
+The configuration utilizes automatic provisioning for the Input-Output Memory Management Unit and integrates the ICH9 virtual chipset. This permits the guest to execute internal direct memory access remapping successfully via Message Signaled Interrupts, ensuring the payload environment supports virtualization-based security frameworks without needlessly sacrificing system viability or inducing Secure Kernel initialization failures.
 
 **Implementation Command:**
 
-    VBoxManage modifyvm "NODE-A-VM-NAME" --iommu=none
+    VBoxManage modifyvm "NODE-A-VM-NAME" --iommu=automatic --chipset=ich9
 
 **Diagnostic Command:**
 
-    VBoxManage showvminfo "NODE-A-VM-NAME" | grep -i "IOMMU"
+    VBoxManage showvminfo "NODE-A-VM-NAME" | grep -E -i "(IOMMU|Chipset)"
 
 **Optimal Output:**
 
-    IOMMU:                       None
+    IOMMU:                       Automatic
+    Chipset:                     ich9
 
 ## 10. Graphics Controller and Hardware Acceleration
-The command configures the VirtualBox SVGA graphics controller and strictly enforces three-dimensional hardware acceleration. This modification prevents the Windows 11 Desktop Window Manager from initiating a crash loop by satisfying its Direct3D hardware dependency. To mitigate the expansion of the attack surface toward the host GPU, the video memory is strictly clamped to a minimal operational threshold of 128MB, preventing extensive shader payloads from fully mapping onto the physical rendering engine.
+Enabling 3D hardware acceleration and assigning exactly 128 Megabytes of video memory provides the Windows kernel with sufficient resources to maintain the Desktop Window Manager compositor pipeline. This precise boundary prevents Peripheral Component Interconnect memory-mapped input/output overlaps that trigger persistent black screen loops.
 
 **Implementation Command:**
 
@@ -184,11 +198,11 @@ The command configures the VirtualBox SVGA graphics controller and strictly enfo
     Default Frontend:            gui
 
 ## 11. Interaction Processes and Telemetry Disconnection
-The command terminates all communication channels by disabling the shared clipboard and file transfers. It shuts down diagnostic recording and memory tracing systems. Closing data sockets prevents malicious software from interacting with the host clipboard, reading copied telemetry, or exploiting memory-mapped tracing buffers. The diagnostic output relies on specific VirtualBox 7.x phrasing, appending the word mode to the clipboard attributes, neutralizing the potential for guest-to-host data leakage.
+The sandbox operates as an isolated containment vessel. Disabling shared clipboards, file transfers, and graphical drag-and-drop mechanisms removes bidirectional socket communication. Closing recording buffers restricts the memory-mapped avenues available for out-of-bounds manipulation.
 
 **Implementation Command:**
 
-    VBoxManage modifyvm "NODE-A-VM-NAME" --clipboard-mode=disabled --clipboard-file-transfers=off --drag-and-drop=disabled
+    VBoxManage modifyvm "NODE-A-VM-NAME" --clipboard-mode=disabled --clipboard-file-transfers=disabled --drag-and-drop=disabled
     VBoxManage modifyvm "NODE-A-VM-NAME" --recording=off --tracing-enabled=off
 
 **Diagnostic Command:**
@@ -203,7 +217,7 @@ The command terminates all communication channels by disabling the shared clipbo
     Tracing Enabled:             disabled
 
 ## 12. Firmware Integrity and UEFI Secure Boot
-The command initializes an extensible firmware interface and dynamically injects platform keys and signature databases into the virtual motherboard. Enabling secure boot via the modifynvram subcommand forces the firmware to cryptographically verify the digital signature of the operating system bootloader against the injected certificates. This prevents low-level bootkit malware from modifying the initialization sequence and hiding persistence mechanisms beneath the operating system kernel execution layer.
+Injecting digital certificates directly into the non-volatile memory of the virtual motherboard forces the Extensible Firmware Interface to cryptographically verify the operating system initialization chain. Disabling the basic input/output system menu visually accelerates the detonation process while sealing the pre-boot environment.
 
 **Implementation Command:**
 
@@ -224,25 +238,28 @@ The command initializes an extensible firmware interface and dynamically injects
     Secure Boot:                 enabled
 
 ## 13. TPM Provisioning and Paravirtualization Stabilization
-The command generates a software-based trusted platform module within the memory space of the hypervisor, completely severing the guest from the physical cryptographic hardware while satisfying the Windows 11 hardware requirement. Setting the virtualization provider to match hypervisor standards instructs the kernel on proper interrupt routing, ensuring the system remains stable and responsive. This avoids kernel panics associated with unsupported advanced programmable interrupt controller translation requests.
+Generating a software-based Trusted Platform Module natively within the hypervisor fulfills hardware anchor requirements. Configuring the paravirtualization provider strictly to the Hyper-V standard orchestrates accurate interrupt routing between the guest kernel and the virtual processor cores, guaranteeing sustained system responsiveness.
 
 **Implementation Command:**
 
     VBoxManage modifyvm "NODE-A-VM-NAME" --tpm-type=2.0
     VBoxManage modifyvm "NODE-A-VM-NAME" --paravirt-provider=hyperv
+    VBoxManage modifyvm "NODE-A-VM-NAME" --hpet=on
+    VBoxManage setextradata "NODE-A-VM-NAME" "VBoxInternal/Devices/VMMDev/0/Config/GetHostTimeDisabled" 0
 
 **Diagnostic Command:**
 
-    VBoxManage showvminfo "NODE-A-VM-NAME" | grep -E -i "(TPM|Paravirt)"
+    VBoxManage showvminfo "NODE-A-VM-NAME" | grep -E -i "(TPM|Paravirt|HPET)"
 
 **Optimal Output:**
 
+    HPET:                        enabled
     TPM Type:                    2.0
     Paravirt. Provider:          Hyper-V
     Effective Paravirt. Prov.:   Hyper-V
 
 ## 14. Teleportation, VRDE, and Memory Ballooning
-The command uses proper syntax to disable remote display endpoints and lock the dynamic memory allocation engine. Disabling the remote server closes interaction vectors where an external connection could manipulate the graphical display state. Condensing the memory balloon parameter into the guest-memory-balloon string prevents syntax rejection, ensuring malicious programs cannot manipulate the guest integration features to force the hypervisor to exhaust physical RAM on the Linux host.
+Disabling the remote desktop server endpoints eliminates listening transmission control protocol sockets on the host. Constraining the memory balloon to zero megabytes prevents software from interacting with guest integration modules in an attempt to trigger physical RAM exhaustion.
 
 **Implementation Command:**
 
@@ -260,11 +277,11 @@ The command uses proper syntax to disable remote display endpoints and lock the 
     Guest memory balloon size:   0 Megabytes
 
 ## 15. Nested Hardware Virtualization Constraints
-The command blocks the guest operating system from accessing underlying processor virtualization instructions. This restriction stops malicious software from attempting to build internal hypervisors inside the sandbox to intercept system calls. Preventing the guest from manipulating control structures ensures the primary containment layer remains intact, so the target operating system cannot hide its internal activities from the external analysis instrumentation.
+Enabling nested hardware virtualization perfectly aligns the hypervisor envelope with the mandatory architectural demands of modern enterprise security components. This functionality allows the guest kernel to construct isolated micro-visors for structural validation.
 
 **Implementation Command:**
 
-    VBoxManage modifyvm "NODE-A-VM-NAME" --nested-hw-virt=off
+    VBoxManage modifyvm "NODE-A-VM-NAME" --nested-hw-virt=on
 
 **Diagnostic Command:**
 
@@ -272,15 +289,14 @@ The command blocks the guest operating system from accessing underlying processo
 
 **Optimal Output:**
 
-    Nested VT-x/AMD-V:           disabled
+    Nested VT-x/AMD-V:           enabled
 
-## 16. PCIe NVMe Storage, Host I/O Caching, and Disk Attachment
-The command adds a storage controller and attaches the virtual disk media. Disabling the host cache forces disk reads and writes to bypass the host Linux kernel cache entirely via direct memory access. This severs the link between guest disk activity and host memory, significantly reducing the impact of storage-based exploits while maximizing input/output operations per second for the rigorous demands of executing payloads.
+## 16. SATA Storage, Host I/O Caching, and Disk Attachment
+The architecture relies on a virtualized Serial ATA controller operating via the Advanced Host Controller Interface. Maintaining the native storage controller topology prevents early boot storage driver panics inside the guest operating system. Explicitly disabling host-side input/output caching ensures continuous disk writes interact exclusively with the hypervisor boundary rather than polluting the physical memory stack of the host OS.
 
 **Implementation Command:**
 
-    VBoxManage storagectl "NODE-A-VM-NAME" --name "NVMe-Controller" --add=pcie --controller=NVMe --portcount=1 --hostiocache=off
-    VBoxManage storageattach "NODE-A-VM-NAME" --storagectl "NVMe-Controller" --port 0 --device 0 --type hdd --medium "NODE-A-VDI-FILENAME"
+    VBoxManage storagectl "NODE-A-VM-NAME" --name "SATA" --add sata --controller IntelAhci --portcount 2 --hostiocache off
 
 **Diagnostic Command:**
 
@@ -291,7 +307,7 @@ The command adds a storage controller and attaches the virtual disk media. Disab
     Host I/O Cache:              off
 
 ## 17. Shared Folder Removal
-The command systematically attempts to delete permanent or temporary shared folders that might exist between the host and the virtual machine. It runs silently, ignoring errors if no folders are found. Removing shared directories is a mandatory security step that destroys direct file-system bridges, preventing malicious software from escaping the execution engine by iterating through mounted volume paths and writing destructive payloads to the host.
+The architecture systematically obliterates all permanent and transient folder allocations. Executing the commands with silenced standard error output safely ignores non-existent directory warnings while destroying primary file-system traversal vectors.
 
 **Implementation Command:**
 
@@ -306,18 +322,21 @@ The command systematically attempts to delete permanent or temporary shared fold
 
     Shared folders:              <none>
 
-## 18. Immutable Disk State with Auto-Reset
-The command locks the primary virtual disk into a read-only state, generating a differencing disk overlay within a temporary file. Every registry modification, dropped executable, and systemic change is captured exclusively within this transient overlay. Upon shutdown, the engine destroys the overlay completely, purging all forensic artifacts and permanently returning the environment to a pristine, untainted baseline for subsequent detonation cycles.
+## 18. Immutable Disk State Isolation
+To maintain absolute forensic purity, the primary virtual disk media is locked into an immutable state. The hypervisor orchestrates a differencing overlay for all system modifications automatically upon initialization. The configuration isolates the globally registered identifier, detaches the medium from the controller to break state dependencies, applies the immutable lock, and maps the secured disk back to the primary storage pipeline.
 
 **Implementation Command:**
 
-    VBoxManage modifymedium "NODE-A-VDI-FILENAME" --type immutable --autoreset=on
+    VDI_UUID=$(VBoxManage list hdds | grep -e "^UUID:" -e "^Location:" | grep -B 1 -i "NODE-A-VDI-FILENAME" | grep "^UUID:" | awk '{print $2}' | head -n 1)
+    VBoxManage storageattach "NODE-A-VM-NAME" --storagectl "SATA" --port 0 --device 0 --type hdd --medium none 2>/dev/null || true
+    VBoxManage modifymedium "$VDI_UUID" --type immutable
+    VBoxManage storageattach "NODE-A-VM-NAME" --storagectl "SATA" --port 0 --device 0 --type hdd --medium "$VDI_UUID"
 
 **Diagnostic Command:**
 
-    VBoxManage showmediuminfo "NODE-A-VDI-FILENAME" | grep -E -i "(Type|Auto-Reset)"
+    VDI_UUID=$(VBoxManage list hdds | grep -e "^UUID:" -e "^Location:" | grep -B 1 -i "NODE-A-VDI-FILENAME" | grep "^UUID:" | awk '{print $2}' | head -n 1)
+    VBoxManage showmediuminfo "$VDI_UUID" | grep -E -i "(Type)"
 
 **Optimal Output:**
 
     Type:                        immutable
-    Auto-Reset:                  on

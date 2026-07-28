@@ -7,7 +7,7 @@
     VBoxManage storageattach "NODE-C-VM-NAME" --storagectl "NVMe-Telemetry" --port 0 --device 0 --type hdd --medium "NODE-C-VDI-FILENAME" && \
     VBoxManage modifyvm "NODE-C-VM-NAME" --audio-driver=none --audio-controller=none --usb=off --usbehci=off --usbxhci=off && \
     VBoxManage modifyvm "NODE-C-VM-NAME" --clipboard-mode=disabled --drag-and-drop=disabled --vrde=off && \
-    VBoxManage modifyvm "NODE-C-VM-NAME" --spec-ctrl=on --l1d-flush-on-vm-entry=on --mds-clear-on-vm-entry=on --ibpb-on-vm-entry=on --ibpb-on-vm-exit=on && \
+    VBoxManage modifyvm "NODE-C-VM-NAME" --spec-ctrl=on --l1d-flush-on-vm-entry=on --mds-clear-on-vm-entry=on --ibpb-on-vm-entry=on --ibpb-on-vm-exit=off && \
     VBoxManage modifyvm "NODE-C-VM-NAME" --firmware=efi64 && \
     VBoxManage modifynvram "NODE-C-VM-NAME" inituefivarstore && \
     VBoxManage modifynvram "NODE-C-VM-NAME" enrollorclpk && \
@@ -20,7 +20,7 @@
     [default]
     interface=NODE-C-LINUX-INTERFACE
     pcapReadMethod=pcap-over-ip-server
-    pcapoverip=NODE-B-STATIC-IP:NODE-C-PCAP-PORT
+    pcapoverip=NODE-B-STATIC-IP:57012
     elasticsearch=NODE-C-ELASTICSEARCH-URL
     EOF
     systemctl restart arkimecapture.service
@@ -29,7 +29,7 @@
 
     VBoxManage showvminfo "NODE-C-VM-NAME" | grep -i -E "(NIC 1|Number of CPUs|Memory size)" ; \
     VBoxManage showvminfo "NODE-C-VM-NAME" | grep -i "NVMe-Telemetry" -A 2 ; \
-    VBoxManage showvminfo "NODE-C-VM-NAME" | grep -E -i "(Clipboard Mode|USB:|Audio:|Secure Boot|mds-clear)" ; \
+    VBoxManage showvminfo "NODE-C-VM-NAME" | grep -E -i "(Clipboard Mode|USB:|Audio:|Secure Boot|mds-clear|l1d-flush|ibpb)" ; \
     grep -A 8 "^af-packet:" /etc/suricata/suricata.yaml ; \
     /opt/zeek/bin/zeekctl status ; \
     systemctl status arkimecapture.service | grep -i "pcapoverip"
@@ -47,6 +47,8 @@
     Audio: disabled (Driver: None, Controller: None, Codec: Unknown)
     Secure Boot: enabled
     mds-clear-on-vm-entry="on"
+    l1d-flush-on-vm-entry="on"
+    ibpb-on-vm-exit="off"
     af-packet:
     interface: NODE-C-LINUX-INTERFACE
     cluster-id: 99

@@ -1,9 +1,9 @@
-# Oracle VM VirtualBox 7.2.14 Synthetic Gateway Configuration (Node B)
+# Oracle VM VirtualBox Synthetic Gateway Configuration (Node B)
 
-This document outlines the technical configuration for the gateway virtual machine operating on a Fedora 44 host. The system functions as an internet simulator designed to provide deceptive network responses, intercept command-and-control traffic, and emulate high-fidelity services without allowing external egress. Hardware vulnerability buffers and secure boot mechanisms have been fully injected to match the strict hypervisor isolation parameters defined in the primary detonation node.
+This document outlines the technical configuration for the dual-homed proxy node. The architectural mandate requires the seamless ingestion of hostile traffic from the detonation environment without introducing processing latency. By synchronizing the microarchitectural isolation parameters with the primary sandbox and integrating precise transport layer interception routing, the configuration sustains high-throughput interception dynamically.
 
 ## 1. Dual-Homed Network Provisioning and VirtIO Encapsulation
-The network architecture provisions two independent, paravirtualized network interfaces bound to distinct internal host-memory switches. The primary interface attaches to the detonation network, receiving hostile traffic from the Windows 11 sandbox. The secondary interface connects to the isolated control network. The engine utilizes the VirtIO paravirtualized driver to establish a shared-memory ring buffer, bypassing hardware emulation overhead, eliminating buffer overflows, and minimizing latency anomalies that could alert heuristic evasion checks.
+Connecting the primary interface to the sandbox switch in promiscuous mode forces the proxy to ingest all Ethernet frames. The secondary interface connects to the sterile control network. The targeted modification utilizes the VirtIO paravirtualized driver to establish an efficient memory-mapped ring buffer, bypassing legacy hardware emulation and queue exhaustion.
 
 **Implementation Command:**
 
@@ -21,27 +21,29 @@ The network architecture provisions two independent, paravirtualized network int
     NIC 2: MAC: 080027XXXXYY, Attachment: Internal Network 'VBOX-NETWORK-CONTROL', Cable connected: on, Trace: off (file: none), Type: virtio, Reported speed: 0 Mbps, Boot priority: 0, Promisc Policy: deny, Bandwidth group: none
 
 ## 2. Execution Architecture and Microarchitectural Concealment
-The engine allocates two physical processing cores, capped at maximum utilization to ensure real-time packet processing without introducing queue latency. The software aggressively flushes the Level 1 Data Cache and clears Microarchitectural Data Sampling routines upon context switches. Indirect branch predictor barriers are explicitly enforced to isolate the Fedora 44 host processor from speculative execution attacks potentially originating within compromised gateway software modules processing malformed packet payloads.
+The architecture utilizes two physical processing cores capped at maximal capacity to handle cryptographic workloads, supported by an explicit memory allocation of 2048 Megabytes. Modifying the Level 1 Data Cache mitigation to execute solely upon virtual machine entry ensures the proxy virtual machine survives the immense interrupt volume associated with real-time packet processing. The indirect branch predictor barrier on exit is explicitly disabled to preserve operational fluidity.
 
 **Implementation Command:**
 
-    VBoxManage modifyvm "NODE-B-VM-NAME" --cpus=2 --cpu-execution-cap=100
+    VBoxManage modifyvm "NODE-B-VM-NAME" --cpus=2 --cpu-execution-cap=100 --memory=2048
     VBoxManage modifyvm "NODE-B-VM-NAME" --nested-paging=on --large-pages=on --page-fusion=off
-    VBoxManage modifyvm "NODE-B-VM-NAME" --spec-ctrl=on --l1d-flush-on-vm-entry=on --mds-clear-on-vm-entry=on --ibpb-on-vm-entry=on --ibpb-on-vm-exit=on
+    VBoxManage modifyvm "NODE-B-VM-NAME" --spec-ctrl=on --l1d-flush-on-vm-entry=on --mds-clear-on-vm-entry=on --ibpb-on-vm-entry=on --ibpb-on-vm-exit=off
 
 **Diagnostic Command:**
 
-    VBoxManage showvminfo "NODE-B-VM-NAME" --machinereadable | grep -E "(cpus=|nestedpaging|l1d-flush|ibpb)"
+    VBoxManage showvminfo "NODE-B-VM-NAME" --machinereadable | grep -E "(cpus=|memory=|nestedpaging|l1d-flush|ibpb)"
 
 **Optimal Output:**
 
     cpus=2
+    memory=2048
     nestedpaging="on"
     l1d-flush-on-vm-entry="on"
     ibpb-on-vm-entry="on"
+    ibpb-on-vm-exit="off"
 
 ## 3. High-Throughput NVMe Storage Configuration
-The architecture implements a virtualized Non-Volatile Memory Express controller operating over a Peripheral Component Interconnect Express bus. Disabling host caching enforces direct memory access, forcing the virtual input/output requests to bypass the host file system cache. This strictly prevents hostile, high-volume network traffic ingested by the gateway from inducing physical memory pressure or starving the host Linux kernel of necessary block caching resources.
+The virtualized Non-Volatile Memory Express controller utilizes direct memory access. Forcefully disabling host-level caching ensures that high-frequency log writes bypass the host file system buffers, protecting physical host memory from entering a starved state during volumetric network assaults.
 
 **Implementation Command:**
 
@@ -59,7 +61,7 @@ The architecture implements a virtualized Non-Volatile Memory Express controller
     Storage Controller Instance Number (0): 0
 
 ## 4. Telemetry Severance, Virtual Device Lockdown, and Secure Boot
-The system removes interactive telemetry, clipboard sharing mechanisms, and remote display virtual endpoints, locking down peripheral interaction. The engine disables the emulated audio backend and utilizes configuration flags to permanently nullify universal serial bus controllers. Secure boot enforcement ensures that the gateway Linux operating system cannot be structurally compromised by a persistent bootkit leveraging parsed binary exploits over the detonation network.
+Clipboard transfers and audio mapping are explicitly disabled to seal structural vulnerabilities. Initiating Secure Boot strictly prevents persistent exploitation of the proxy itself, ensuring that parsed binary exploits cannot embed persistent rootkits into the startup sequence.
 
 **Implementation Command:**
 
@@ -84,7 +86,7 @@ The system removes interactive telemetry, clipboard sharing mechanisms, and remo
     Secure Boot: enabled
 
 ## 5. Kernel-Level Packet Redirection via Nftables
-The guest operating system utilizes nftables to process network hooks directly in the kernel space, bypassing user-space routing latency. The configuration establishes a prerouting hook within the translation table. The system deterministically forces incoming traffic attempting to reach the external internet on standard web ports into localized listening daemons, trapping the payload within a closed, synthetic networking loop that perfectly simulates external resolution.
+Executing localized deception requires detouring external routing logic seamlessly. The architecture resolves translation latency by compiling translation rules directly into the kernel's prerouting hooks using nftables. Defining a strict drop policy on the forward chain guarantees that outbound traffic targeting non-standard ports cannot bypass the NAT interception and reach the control plane.
 
 **Implementation Command:**
 
@@ -93,10 +95,12 @@ The guest operating system utilizes nftables to process network hooks directly i
     nft add rule ip nat prerouting iifname "NODE-B-LINUX-INTERFACE" tcp dport 443 redirect to :10443
     nft add rule ip nat prerouting iifname "NODE-B-LINUX-INTERFACE" tcp dport 80 redirect to :80
     nft add rule ip nat prerouting iifname "NODE-B-LINUX-INTERFACE" udp dport 53 redirect to :53
+    nft add table ip filter
+    nft add chain ip filter forward '{ type filter hook forward priority 0; policy drop; }'
 
 **Diagnostic Command:**
 
-    nft list table ip nat
+    nft list table ip nat ; nft list table ip filter
 
 **Optimal Output:**
 
@@ -108,9 +112,14 @@ The guest operating system utilizes nftables to process network hooks directly i
     iifname "NODE-B-LINUX-INTERFACE" udp dport 53 redirect to :53
     }
     }
+    table ip filter {
+    chain forward {
+    type filter hook forward priority 0; policy drop;
+    }
+    }
 
 ## 6. Dynamic Cryptographic Interception via PolarProxy
-The software deploys PolarProxy to execute transparent, dynamic transport layer security interception. The proxy continuously generates forged certificates to seamlessly subvert encrypted handshakes initiated by the malicious payload. The engine aggressively utilizes the nosni flag to intercept malformed requests lacking valid server name indications, forcing the encrypted connection to complete, and silently streaming the highly sensitive, decrypted plaintext traffic over a PCAP-over-IP socket directly to the analytical control plane without disk latency overhead.
+PolarProxy executes transparent transport layer security interception. The engine utilizes the nosni flag to intercept malformed requests lacking valid server name indications. Bypassing massive disk input/output bottlenecks, the system streams the decrypted plaintext traffic over a PCAP-over-IP socket (port 57012) directly to the analytical control plane.
 
 **Implementation Command:**
 
@@ -122,7 +131,7 @@ The software deploys PolarProxy to execute transparent, dynamic transport layer 
     [Service]
     Type=simple
     User=NODE-B-LINUX-USER
-    ExecStart=/opt/PolarProxy/PolarProxy -v -p 10443,80,443 -x /var/log/PolarProxy/polarproxy.cer -f /var/log/PolarProxy/proxyflows.log -o /var/log/PolarProxy/ --terminate --nosni NODE-B-TARGET-DOMAIN --pcapoverip NODE-C-PCAP-PORT
+    ExecStart=/opt/PolarProxy/PolarProxy -v -p 10443,80,443 -x /var/log/PolarProxy/polarproxy.cer -f /var/log/PolarProxy/proxyflows.log -o /var/log/PolarProxy/ --terminate --nosni NODE-B-TARGET-DOMAIN --pcapoverip 57012
     Restart=always
     LimitNOFILE=65536
 
@@ -140,7 +149,7 @@ The software deploys PolarProxy to execute transparent, dynamic transport layer 
     Active: active (running)
 
 ## 7. Synthetic Service Emulation via INetSim
-INetSim operates a suite of synthetic daemons to provide structurally valid responses for decrypted application-layer traffic. The domain name service resolves requested records to the internal gateway address dynamically. The system delivers successful HTTP status codes and synthetic binaries to deceive the execution environment, forcing the payload to reveal its secondary deployment stages believing it has successfully contacted its remote infrastructure.
+INetSim structurally simulates the required daemons, delivering positive HTTP status codes and forging dynamic DNS resolutions. Disabling the HTTPS module allows PolarProxy absolute control over port 443 termination, resolving port-binding collisions while presenting a perfectly deceptive execution environment.
 
 **Implementation Command:**
 
